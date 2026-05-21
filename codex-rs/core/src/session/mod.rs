@@ -37,6 +37,7 @@ use crate::context::world_state::WorldState;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::exec_policy::ExecPolicyAmendmentTarget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
@@ -1970,6 +1971,9 @@ impl Session {
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
     /// commands can use the newly approved prefix.
+    ///
+    /// For now this preserves the existing behavior: remembered approval rules are written
+    /// to the user/global default execpolicy file.
     pub(crate) async fn persist_execpolicy_amendment(
         &self,
         amendment: &ExecPolicyAmendment,
@@ -1984,7 +1988,11 @@ impl Session {
 
         self.services
             .exec_policy
-            .append_amendment_and_update(&codex_home, amendment)
+            .append_amendment_and_update(
+                &codex_home,
+                ExecPolicyAmendmentTarget::UserDefault,
+                amendment,
+            )
             .await?;
 
         Ok(())
