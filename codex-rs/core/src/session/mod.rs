@@ -37,6 +37,7 @@ use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
 use crate::exec_policy::ExecPolicyAmendmentTarget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
+use crate::exec_policy::project_default_policy_path;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -2159,11 +2160,47 @@ impl Session {
     ) -> Result<ExecPolicyAmendmentTarget, ExecPolicyUpdateError> {
         match scope {
             ExecPolicyAmendmentScope::UserDefault => Ok(ExecPolicyAmendmentTarget::UserDefault),
+
             ExecPolicyAmendmentScope::ProjectDefault => {
-                Err(ExecPolicyUpdateError::ProjectDefaultUnavailable {
-                    reason: "trusted project-local .codex rules path has not been resolved yet"
-                        .to_string(),
-                })
+                let config = {
+                    let state = self.state.lock().await;
+                    state
+                        .session_configuration
+                        .original_config_do_not_use
+                        .clone()
+                };
+
+                if config
+                    .config_layer_stack
+                    .ignore_user_and_project_exec_policy_rules()
+                {
+                    return Err(ExecPolicyUpdateError::ProjectDefaultUnavailable {
+                        reason: "user and project execpolicy rules are ignored for this session"
+                            .to_string(),
+                    });
+                }
+
+                let dot_codex_folder = config
+                    .config_layer_stack
+                    .get_layers(
+                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                        /* include_disabled */ false,
+                    )
+                    .into_iter()
+                    .find_map(|layer| match &layer.name {
+                        ConfigLayerSource::Project { dot_codex_folder } => {
+                            Some(dot_codex_folder.clone())
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| ExecPolicyUpdateError::ProjectDefaultUnavailable {
+                        reason: "no trusted project-local .codex config layer is active"
+                            .to_string(),
+                    })?;
+
+                Ok(ExecPolicyAmendmentTarget::ProjectDefault(
+                    project_default_policy_path(dot_codex_folder.as_path()),
+                ))
             }
         }
     }

@@ -272,7 +272,6 @@ pub enum ExecPolicyUpdateError {
         #[from]
         source: ExecPolicyRuleError,
     },
-
     #[error("project-local execpolicy amendment target is unavailable: {reason}")]
     ProjectDefaultUnavailable { reason: String },
 }
@@ -853,6 +852,12 @@ fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionPr
 
 pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+}
+
+pub(crate) fn project_default_policy_path(dot_codex_folder: &Path) -> PathBuf {
+    dot_codex_folder
+        .join(RULES_DIR_NAME)
+        .join(DEFAULT_POLICY_FILE)
 }
 
 fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
