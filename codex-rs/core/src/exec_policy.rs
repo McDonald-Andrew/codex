@@ -232,6 +232,12 @@ pub enum ExecPolicyUpdateError {
     },
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ExecPolicyAmendmentTarget {
+    UserDefault,
+    ProjectDefault(PathBuf),
+}
+
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
     update_lock: Semaphore,
@@ -377,6 +383,7 @@ impl ExecPolicyManager {
     pub(crate) async fn append_amendment_and_update(
         &self,
         codex_home: &Path,
+        target: ExecPolicyAmendmentTarget,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let _update_guard =
@@ -388,7 +395,10 @@ impl ExecPolicyManager {
                         "exec policy update semaphore closed".to_string(),
                     ),
                 })?;
-        let policy_path = default_policy_path(codex_home);
+        let policy_path = match target {
+            ExecPolicyAmendmentTarget::UserDefault => default_policy_path(codex_home),
+            ExecPolicyAmendmentTarget::ProjectDefault(path) => path,
+        };
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = amendment.command.clone();
