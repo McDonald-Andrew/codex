@@ -231,6 +231,9 @@ pub enum ExecPolicyUpdateError {
         #[from]
         source: ExecPolicyRuleError,
     },
+
+    #[error("project-local execpolicy amendment target is unavailable: {reason}")]
+    ProjectDefaultUnavailable { reason: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

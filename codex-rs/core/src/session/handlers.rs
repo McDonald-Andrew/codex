@@ -32,7 +32,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -65,8 +64,6 @@ use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
-
-use crate::exec_policy::ExecPolicyAmendmentTarget;
 
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
@@ -407,28 +404,10 @@ pub async fn exec_approval(
         proposed_execpolicy_amendment,
     } = &decision
     {
-        let target = match scope {
-            ExecPolicyAmendmentScope::UserDefault => ExecPolicyAmendmentTarget::UserDefault,
-            ExecPolicyAmendmentScope::ProjectDefault => {
-                tracing::warn!(
-                    "project-local execpolicy amendment scope requested, but repo-local target resolution is not implemented yet; falling back to user default"
-                );
-                ExecPolicyAmendmentTarget::UserDefault
-            }
-        };
-        match sess
-            .persist_execpolicy_amendment(target, proposed_execpolicy_amendment)
-            .await
-        {
-            Ok(()) => {
-                sess.record_execpolicy_amendment_message(
-                    &event_turn_id,
-                    proposed_execpolicy_amendment,
-                )
-                .await;
-            }
+        let target = match sess.resolve_execpolicy_amendment_target(scope).await {
+            Ok(target) => Some(target),
             Err(err) => {
-                let message = format!("Failed to apply execpolicy amendment: {err}");
+                let message = format!("Failed to resolve execpolicy amendment target: {err}");
                 tracing::warn!("{message}");
                 let warning = EventMsg::Warning(WarningEvent { message });
                 sess.send_event_raw(Event {
@@ -436,6 +415,32 @@ pub async fn exec_approval(
                     msg: warning,
                 })
                 .await;
+                None
+            }
+        };
+
+        if let Some(target) = target {
+            match sess
+                .persist_execpolicy_amendment(target, proposed_execpolicy_amendment)
+                .await
+            {
+                Ok(()) => {
+                    sess.record_execpolicy_amendment_message(
+                        &event_turn_id,
+                        proposed_execpolicy_amendment,
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    let message = format!("Failed to apply execpolicy amendment: {err}");
+                    tracing::warn!("{message}");
+                    let warning = EventMsg::Warning(WarningEvent { message });
+                    sess.send_event_raw(Event {
+                        id: event_turn_id.clone(),
+                        msg: warning,
+                    })
+                    .await;
+                }
             }
         }
     }
