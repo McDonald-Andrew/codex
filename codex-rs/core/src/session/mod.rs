@@ -338,6 +338,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
@@ -1883,6 +1884,21 @@ impl Session {
             .await?;
 
         Ok(())
+    }
+
+    pub(crate) async fn resolve_execpolicy_amendment_target(
+        &self,
+        scope: &ExecPolicyAmendmentScope,
+    ) -> Result<ExecPolicyAmendmentTarget, ExecPolicyUpdateError> {
+        match scope {
+            ExecPolicyAmendmentScope::UserDefault => Ok(ExecPolicyAmendmentTarget::UserDefault),
+            ExecPolicyAmendmentScope::ProjectDefault => {
+                Err(ExecPolicyUpdateError::ProjectDefaultUnavailable {
+                    reason: "trusted project-local .codex rules path has not been resolved yet"
+                        .to_string(),
+                })
+            }
+        }
     }
 
     pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
