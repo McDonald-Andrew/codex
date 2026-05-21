@@ -1971,11 +1971,9 @@ impl Session {
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
     /// commands can use the newly approved prefix.
-    ///
-    /// For now this preserves the existing behavior: remembered approval rules are written
-    /// to the user/global default execpolicy file.
     pub(crate) async fn persist_execpolicy_amendment(
         &self,
+        target: ExecPolicyAmendmentTarget,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let codex_home = self
@@ -1988,11 +1986,7 @@ impl Session {
 
         self.services
             .exec_policy
-            .append_amendment_and_update(
-                &codex_home,
-                ExecPolicyAmendmentTarget::UserDefault,
-                amendment,
-            )
+            .append_amendment_and_update(&codex_home, target, amendment)
             .await?;
 
         Ok(())
