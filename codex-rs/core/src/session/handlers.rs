@@ -58,6 +58,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::exec_policy::ExecPolicyAmendmentTarget;
+
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
 }
@@ -361,7 +363,10 @@ pub async fn exec_approval(
     } = &decision
     {
         match sess
-            .persist_execpolicy_amendment(proposed_execpolicy_amendment)
+            .persist_execpolicy_amendment(
+                ExecPolicyAmendmentTarget::UserDefault,
+                proposed_execpolicy_amendment,
+            )
             .await
         {
             Ok(()) => {
