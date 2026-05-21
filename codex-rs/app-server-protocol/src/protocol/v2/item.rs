@@ -69,6 +69,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
             CoreReviewDecision::Approved => Self::Accept,
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
+                ..
             } => Self::AcceptWithExecpolicyAmendment {
                 execpolicy_amendment: proposed_execpolicy_amendment.into(),
             },

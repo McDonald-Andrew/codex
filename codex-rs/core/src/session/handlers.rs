@@ -32,6 +32,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -402,14 +403,21 @@ pub async fn exec_approval(
 ) {
     let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
     if let ReviewDecision::ApprovedExecpolicyAmendment {
+        scope,
         proposed_execpolicy_amendment,
     } = &decision
     {
+        let target = match scope {
+            ExecPolicyAmendmentScope::UserDefault => ExecPolicyAmendmentTarget::UserDefault,
+            ExecPolicyAmendmentScope::ProjectDefault => {
+                tracing::warn!(
+                    "project-local execpolicy amendment scope requested, but repo-local target resolution is not implemented yet; falling back to user default"
+                );
+                ExecPolicyAmendmentTarget::UserDefault
+            }
+        };
         match sess
-            .persist_execpolicy_amendment(
-                ExecPolicyAmendmentTarget::UserDefault,
-                proposed_execpolicy_amendment,
-            )
+            .persist_execpolicy_amendment(target, proposed_execpolicy_amendment)
             .await
         {
             Ok(()) => {
