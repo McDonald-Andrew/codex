@@ -72,6 +72,7 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::approvals::ExecPolicyAmendmentScope;
 pub use crate::approvals::GuardianAssessmentAction;
 pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
@@ -4050,6 +4051,7 @@ pub enum ReviewDecision {
     /// User has approved this command and wants to apply the proposed execpolicy
     /// amendment so future matching commands are permitted.
     ApprovedExecpolicyAmendment {
+        scope: ExecPolicyAmendmentScope,
         proposed_execpolicy_amendment: ExecPolicyAmendment,
     },
 
