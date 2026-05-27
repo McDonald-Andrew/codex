@@ -95,7 +95,6 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -1978,10 +1977,11 @@ async fn on_command_execution_request_approval_response(
                     (ReviewDecision::ApprovedForSession, None)
                 }
                 CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                    scope,
                     execpolicy_amendment,
                 } => (
                     ReviewDecision::ApprovedExecpolicyAmendment {
-                        scope: ExecPolicyAmendmentScope::UserDefault,
+                        scope,
                         proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
                     },
                     None,

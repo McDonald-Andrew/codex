@@ -15,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
@@ -2237,6 +2238,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::UserDefault,
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
             },
         })
@@ -2483,6 +2485,7 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::UserDefault,
                 proposed_execpolicy_amendment: expected_execpolicy_amendment,
             },
         })
@@ -2741,6 +2744,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
             id: approval_id,
             turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::UserDefault,
                 proposed_execpolicy_amendment: amendment.clone(),
             },
         })
