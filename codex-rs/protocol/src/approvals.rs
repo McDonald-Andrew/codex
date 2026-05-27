@@ -335,6 +335,10 @@ impl ExecApprovalRequestEvent {
         let mut decisions = vec![ReviewDecision::Approved];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::ProjectDefault,
+                proposed_execpolicy_amendment: prefix.clone(),
+            });
+            decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
                 scope: ExecPolicyAmendmentScope::UserDefault,
                 proposed_execpolicy_amendment: prefix.clone(),
             });
