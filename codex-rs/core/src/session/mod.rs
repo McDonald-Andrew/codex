@@ -2251,11 +2251,7 @@ impl Session {
 
                 let dot_codex_folder = config
                     .config_layer_stack
-                    .get_layers(
-                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                        /* include_disabled */ false,
-                    )
-                    .into_iter()
+                    .layers_high_to_low()
                     .find_map(|layer| match &layer.name {
                         ConfigLayerSource::Project { dot_codex_folder } => {
                             Some(dot_codex_folder.clone())
