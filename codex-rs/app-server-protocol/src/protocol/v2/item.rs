@@ -25,6 +25,7 @@ use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization as CoreGuardianUserAuthorization;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -51,6 +52,7 @@ pub enum CommandExecutionApprovalDecision {
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
     AcceptWithExecpolicyAmendment {
+        scope: ExecPolicyAmendmentScope,
         execpolicy_amendment: ExecPolicyAmendment,
     },
     /// User chose a persistent network policy rule (allow/deny) for this host.
@@ -68,8 +70,10 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
             CoreReviewDecision::ApprovedExecpolicyAmendment {
+                scope,
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {
+                scope,
                 execpolicy_amendment: proposed_execpolicy_amendment.into(),
             },
             CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,

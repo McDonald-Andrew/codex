@@ -52,6 +52,7 @@ use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::RequestId;
 use codex_features::Features;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -821,6 +822,7 @@ fn command_decision_to_review_decision(
         CommandExecutionApprovalDecision::AcceptForSession => ReviewDecision::ApprovedForSession,
         CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
             execpolicy_amendment,
+            ..
         } => ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment: execpolicy_amendment.clone().into_core(),
         },
@@ -853,23 +855,35 @@ fn exec_options(
                 shortcuts: keymap.approve.clone(),
             }),
             CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                scope,
                 execpolicy_amendment,
             } => {
                 let rendered_prefix = strip_bash_lc_and_escape(&execpolicy_amendment.command);
-                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+                if rendered_prefix.is_empty() {
                     return None;
                 }
 
+                let scope_text = match scope {
+                    ExecPolicyAmendmentScope::ProjectDefault => "in this repo",
+                    ExecPolicyAmendmentScope::UserDefault => "globally",
+                };
+
+                let shortcuts = match scope {
+                    ExecPolicyAmendmentScope::ProjectDefault => keymap.approve_for_prefix.clone(),
+                    ExecPolicyAmendmentScope::UserDefault => Vec::new(),
+                };
+
                 Some(ApprovalOption {
                     label: format!(
-                        "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
+                        "Yes, and don't ask again {scope_text} for commands that start with `{rendered_prefix}`"
                     ),
                     decision: ApprovalDecision::Command(
                         CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                            scope: scope.clone(),
                             execpolicy_amendment: execpolicy_amendment.clone(),
                         },
                     ),
-                    shortcuts: keymap.approve_for_prefix.clone(),
+                    shortcuts,
                 })
             }
             CommandExecutionApprovalDecision::AcceptForSession => Some(ApprovalOption {
@@ -1562,6 +1576,7 @@ mod tests {
     fn exec_prefix_option_emits_execpolicy_amendment() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
+        let scope = ExecPolicyAmendmentScope::ProjectDefault;
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
@@ -1572,6 +1587,7 @@ mod tests {
                 available_decisions: vec![
                     CommandExecutionApprovalDecision::Accept,
                     CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                        scope: scope.clone(),
                         execpolicy_amendment: ExecPolicyAmendment {
                             command: vec!["echo".to_string()],
                         },
@@ -1595,6 +1611,7 @@ mod tests {
                 assert_eq!(
                     decision,
                     CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                        scope,
                         execpolicy_amendment: ExecPolicyAmendment {
                             command: vec!["echo".to_string()],
                         }
@@ -1607,6 +1624,40 @@ mod tests {
         assert!(
             saw_op,
             "expected approval decision to emit an op with command prefix"
+        );
+    }
+
+    #[test]
+    fn exec_prefix_shortcut_is_not_bound_for_global_amendment() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_overlay(
+            ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
+                id: "test".to_string(),
+                command: vec!["echo".to_string()],
+                reason: None,
+                available_decisions: vec![
+                    CommandExecutionApprovalDecision::Accept,
+                    CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                        scope: ExecPolicyAmendmentScope::UserDefault,
+                        execpolicy_amendment: ExecPolicyAmendment {
+                            command: vec!["echo".to_string()],
+                        },
+                    },
+                    CommandExecutionApprovalDecision::Cancel,
+                ],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert!(
+            rx.try_recv().is_err(),
+            "global execpolicy amendment should not bind the approve-for-prefix shortcut"
         );
     }
 
