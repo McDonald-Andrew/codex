@@ -2,6 +2,11 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::TomlValue;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
@@ -2129,6 +2134,186 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     assert!(fs::read_to_string(&path)?.contains("after"));
     let _ = fs::remove_file(path);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn execpolicy_project_scope_writes_to_project_rules() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
+
+        // Simulate a trusted project-local `.codex/config.toml` layer.
+        //
+        // The production path discovers this via the config loader when the user
+        // runs Codex inside a trusted project. In this test, we inject the enabled
+        // project layer directly so `ProjectDefault` has a trusted `.codex` folder to resolve.
+        let dot_codex_folder = config.cwd.join(".codex");
+        fs::create_dir_all(dot_codex_folder.as_path()).expect("create project .codex dir");
+        fs::write(dot_codex_folder.join("config.toml"), "").expect("write project config");
+
+        // The test has already built the config layer stack before this closure runs,
+        // so creating `.codex/config.toml` above is not enough for discovery.
+        // Inject one enabled project layer into the stack so ProjectDefault resolves
+        // through the same config-layer mechanism used by production code.
+        //
+        // Filter out any pre-existing project layers to keep this test isolated from
+        // the developer's surrounding checkout/config environment.
+        let mut layers: Vec<_> = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /* include_disabled */ true,
+            )
+            .into_iter()
+            .filter(|layer| !matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect();
+
+        let project_layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+
+        let insert_index = layers
+            .iter()
+            .position(|layer| layer.name.precedence() > project_layer.name.precedence())
+            .unwrap_or(layers.len());
+
+        layers.insert(insert_index, project_layer);
+
+        let ignore_user_and_project_exec_policy_rules = config
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules();
+
+        config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            config.config_layer_stack.requirements().clone(),
+            config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("project config layer stack should be valid")
+        .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
+    });
+
+    let test = builder.build(&server).await?;
+
+    let allow_prefix_path = test.cwd.path().join("project-scope-allow-prefix.txt");
+    let _ = fs::remove_file(&allow_prefix_path);
+
+    let call_id_first = "project-scope-allow-prefix-first";
+    let (first_event, expected_command) = ActionKind::RunCommand {
+        command: "touch project-scope-allow-prefix.txt",
+    }
+    .prepare(
+        &test,
+        &server,
+        call_id_first,
+        SandboxPermissions::UseDefault,
+    )
+    .await?;
+
+    let expected_command =
+        expected_command.expect("execpolicy amendment scenario should produce a shell command");
+
+    let expected_execpolicy_amendment = ExecPolicyAmendment::new(vec![
+        "touch".to_string(),
+        "project-scope-allow-prefix.txt".to_string(),
+    ]);
+
+    let expected_rule =
+        r#"prefix_rule(pattern=["touch", "project-scope-allow-prefix.txt"], decision="allow")"#;
+
+    let project_policy_path = test
+        .cwd
+        .path()
+        .join(".codex")
+        .join("rules")
+        .join("default.rules");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-project-scope-allow-prefix-1"),
+            first_event,
+            ev_completed("resp-project-scope-allow-prefix-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "project-scope-allow-prefix-first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_execpolicy_amendment.clone())
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::ProjectDefault,
+                proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
+            },
+        })
+        .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(project_policy_contents) = fs::read_to_string(&project_policy_path)
+            && project_policy_contents.contains(expected_rule)
+        {
+            break;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            let project_policy_contents =
+                fs::read_to_string(&project_policy_path).unwrap_or_else(|err| {
+                    format!("failed to read project policy file at {project_policy_path:?}: {err}")
+                });
+
+            anyhow::bail!(
+                "timed out waiting for project policy file {project_policy_path:?} \
+                 to contain {expected_rule:?}; contents: {project_policy_contents}"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let project_policy_contents = fs::read_to_string(&project_policy_path)
+        .with_context(|| format!("read project policy file at {project_policy_path:?}"))?;
+
+    assert!(
+        project_policy_contents.contains(expected_rule),
+        "expected project policy file to contain {expected_rule:?}, got: {project_policy_contents}"
+    );
+
+    let user_policy_path = test.home.path().join("rules").join("default.rules");
+    if user_policy_path.exists() {
+        let user_policy_contents = fs::read_to_string(&user_policy_path)
+            .with_context(|| format!("read user policy file at {user_policy_path:?}"))?;
+
+        assert!(
+            !user_policy_contents.contains(expected_rule),
+            "project-scoped execpolicy amendment should not be written to user policy file; got: {user_policy_contents}"
+        );
+    }
     Ok(())
 }
 
