@@ -457,14 +457,29 @@ impl ExecPolicyManager {
                         "exec policy update semaphore closed".to_string(),
                     ),
                 })?;
-        let policy_path = match target {
-            ExecPolicyAmendmentTarget::UserDefault => default_policy_path(codex_home),
-            ExecPolicyAmendmentTarget::ProjectDefault(path) => path,
+        let (policy_path, initialize_parent_dirs) = match target {
+            ExecPolicyAmendmentTarget::UserDefault => (default_policy_path(codex_home), false),
+            ExecPolicyAmendmentTarget::ProjectDefault(path) => (path, true),
         };
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = amendment.command.clone();
-            move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
+            move || {
+                if initialize_parent_dirs {
+                    let parent = policy_path
+                        .parent()
+                        .ok_or_else(|| AmendError::MissingParent {
+                            path: policy_path.clone(),
+                        })?;
+                    std::fs::create_dir_all(parent).map_err(|source| {
+                        AmendError::CreatePolicyDir {
+                            dir: parent.to_path_buf(),
+                            source,
+                        }
+                    })?;
+                }
+                blocking_append_allow_prefix_rule(&policy_path, &prefix)
+            }
         })
         .await
         .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
