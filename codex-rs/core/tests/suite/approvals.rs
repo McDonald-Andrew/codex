@@ -15,6 +15,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -2358,6 +2359,154 @@ async fn execpolicy_project_scope_writes_to_project_rules() -> Result<()> {
             "project-scoped execpolicy amendment should not be written to user policy file; got: {user_policy_contents}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn execpolicy_project_scope_creates_missing_rules_for_trusted_project() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
+        config.active_project.trust_level = Some(TrustLevel::Trusted);
+
+        let layers: Vec<_> = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /* include_disabled */ true,
+            )
+            .into_iter()
+            .filter(|layer| !matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect();
+
+        let ignore_user_and_project_exec_policy_rules = config
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules();
+
+        config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            config.config_layer_stack.requirements().clone(),
+            config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("project config layer stack should be valid")
+        .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
+    });
+
+    let test = builder.build(&server).await?;
+    assert!(test.config.active_project.is_trusted());
+    let dot_codex_folder = test.config.cwd.join(".codex");
+    assert!(
+        !dot_codex_folder.exists(),
+        "test must start without a project-local .codex folder"
+    );
+
+    let call_id_first = "project-scope-missing-dot-codex-first";
+    let (first_event, expected_command) = ActionKind::RunCommand {
+        command: "touch project-scope-missing-dot-codex.txt",
+    }
+    .prepare(
+        &test,
+        &server,
+        call_id_first,
+        SandboxPermissions::UseDefault,
+    )
+    .await?;
+
+    let expected_command =
+        expected_command.expect("execpolicy amendment scenario should produce a shell command");
+
+    let expected_execpolicy_amendment = ExecPolicyAmendment::new(vec![
+        "touch".to_string(),
+        "project-scope-missing-dot-codex.txt".to_string(),
+    ]);
+
+    let expected_rule = r#"prefix_rule(pattern=["touch", "project-scope-missing-dot-codex.txt"], decision="allow")"#;
+    let project_policy_path = dot_codex_folder.join("rules").join("default.rules");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-project-scope-missing-dot-codex-1"),
+            first_event,
+            ev_completed("resp-project-scope-missing-dot-codex-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "project-scope-missing-dot-codex-first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_execpolicy_amendment.clone())
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::ProjectDefault,
+                proposed_execpolicy_amendment: expected_execpolicy_amendment,
+            },
+        })
+        .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(project_policy_contents) = fs::read_to_string(&project_policy_path)
+            && project_policy_contents.contains(expected_rule)
+        {
+            break;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            let project_policy_contents =
+                fs::read_to_string(&project_policy_path).unwrap_or_else(|err| {
+                    format!("failed to read project policy file at {project_policy_path:?}: {err}")
+                });
+
+            anyhow::bail!(
+                "timed out waiting for project policy file {project_policy_path:?} \
+                 to contain {expected_rule:?}; contents: {project_policy_contents}"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let project_policy_contents = fs::read_to_string(&project_policy_path)
+        .with_context(|| format!("read project policy file at {project_policy_path:?}"))?;
+    assert!(
+        project_policy_contents.contains(expected_rule),
+        "expected project policy file to contain {expected_rule:?}, got: {project_policy_contents}"
+    );
+
+    let user_policy_path = test.home.path().join("rules").join("default.rules");
+    if user_policy_path.exists() {
+        let user_policy_contents = fs::read_to_string(&user_policy_path)
+            .with_context(|| format!("read user policy file at {user_policy_path:?}"))?;
+        assert!(
+            !user_policy_contents.contains(expected_rule),
+            "project-scoped execpolicy amendment should not be written to user policy file; got: {user_policy_contents}"
+        );
+    }
+
     Ok(())
 }
 

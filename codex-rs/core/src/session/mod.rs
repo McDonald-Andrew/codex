@@ -1926,9 +1926,14 @@ impl Session {
                         }
                         _ => None,
                     })
+                    .or_else(|| {
+                        config
+                            .active_project
+                            .is_trusted()
+                            .then(|| config.cwd.join(".codex"))
+                    })
                     .ok_or_else(|| ExecPolicyUpdateError::ProjectDefaultUnavailable {
-                        reason: "no trusted project-local .codex config layer is active"
-                            .to_string(),
+                        reason: "project is not trusted and no trusted project-local .codex config layer is active".to_string(),
                     })?;
 
                 Ok(ExecPolicyAmendmentTarget::ProjectDefault(
