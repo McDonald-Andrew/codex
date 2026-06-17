@@ -1,0 +1,309 @@
+name: 1 Sync Fork `main` with `upstream/main`
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 8:00 AM UTC | 3:00 AM EST (4:00 AM EDT) | 12:00 AM PST (1:00 AM PDT)
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-origin-Main
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Confirm if on Forked Repo
+    runs-on: ubuntu-latest
+    # So the workflow only runs on my fork
+    if: github.repository == 'McDonald-Andrew/codex'
+    steps:
+      - name: Proceed
+        run: echo "Proceed"
+
+  sync:
+    needs: guard
+    name: Sync Fork with Upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork `main`
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_WORKFLOW_PAT }}
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Upstream Remote
+        run: |
+          git remote add upstream https://github.com/openai/codex.git
+          git remote -v
+
+      - name: Sync
+        run: |
+          git switch main
+          git fetch upstream
+          git rebase upstream/main
+          git push --force-with-lease origin main
+
+  email-if-sync-failure:
+    needs: sync
+    name: Email if Upstream Sync Failure
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.sync.result == 'failure' }}
+    steps:
+      - name: Send failure email
+        uses: hilarion5/send-mail@v1
+        with:
+          smtp-server: ${{ secrets.SMTP_SERVER }}
+          smtp-port: ${{ secrets.SMTP_PORT }}
+          smtp-secure: true
+          from-email: ${{ secrets.SMTP_FROM_EMAIL }}
+          to-email: ${{ secrets.NOTIFY_EMAIL }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "CX-000 Rebase on Synced Main Failed"
+          body: |
+            origin/main failed to sync with upstream/main.
+
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Run number: ${{ github.run_number }}
+            Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Manual action needed:
+
+            Ensure this step passes
+
+  rebase-feature-branch:
+    needs: sync
+    name: Rebase CX-000 onto origin/main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_WORKFLOW_PAT }}
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Copy rerere Cache
+        run: |
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+          mkdir -p .git/rr-cache
+          if [ -d .github/rerere/rr-cache ]; then
+            cp -R .github/rerere/rr-cache/. .git/rr-cache/
+          fi
+
+      - name: Rebase CX-000 onto origin/main
+        run: |
+          git fetch origin
+          git switch CX-000
+          git rebase origin/main
+          git log --oneline origin/main..HEAD
+          git push --force-with-lease origin CX-000
+
+  email-if-rebase-failure:
+    needs: rebase-feature-branch
+    name: Email if Rebase Failure
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.rebase-feature-branch.result == 'failure' }}
+    steps:
+      - name: Send failure email
+        uses: hilarion5/send-mail@v1
+        with:
+          smtp-server: ${{ secrets.SMTP_SERVER }}
+          smtp-port: ${{ secrets.SMTP_PORT }}
+          smtp-secure: true
+          from-email: ${{ secrets.SMTP_FROM_EMAIL }}
+          to-email: ${{ secrets.NOTIFY_EMAIL }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "CX-000 Rebase on Synced Main Failed"
+          body: |
+            CX-000 failed to rebase onto origin/main.
+
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Run number: ${{ github.run_number }}
+            Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Manual action needed:
+
+            git switch main
+            git pull --ff-only origin main
+
+            git switch CX-000
+            git fetch origin
+            git rebase origin/main
+
+            Resolve conflicts manually, then:
+
+            git add <resolved-files>
+            git rebase --continue
+            git push --force-with-lease origin CX-000
+
+            Then update rerere cache on main if a new resolution was learned.
+
+  feature-branch-added-tests:
+    needs: rebase-feature-branch
+    name: CX-000 Created Tests
+    runs-on: ubuntu-latest
+    if: ${{ needs.rebase-feature-branch.result == 'success' }}
+    env:
+      RUST_MIN_STACK: 67108864 # Give the test worker threads 64 MiB
+      CARGO_INCREMENTAL: 0 # Avoids huge incremental compilation caches on GitHub runners.
+      RUSTFLAGS: "-C debuginfo=0" # Reduce debug artifact size reducing likelyhood of running out of disk.
+    steps:
+      - name: Checkout rebased CX-000
+        uses: actions/checkout@v6
+        with:
+          ref: CX-000
+          fetch-depth: 0
+
+      - name: Install Linux sandbox dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          which bwrap
+          bwrap --version
+
+      - name: Run
+        working-directory: codex-rs
+        run: |
+          cargo test -p codex-core --test all execpolicy_project_scope_writes_to_project_rules -- --nocapture
+          cargo test -p codex-core --test all execpolicy_project_scope_creates_missing_rules_for_trusted_project -- --nocapture
+          cargo test -p codex-tui --lib exec_prefix_shortcut_is_not_bound_for_global_amendment -- --nocapture
+
+  feature-branch-edited-tests:
+    needs: rebase-feature-branch
+    name: CX-000 Edited Tests
+    runs-on: ubuntu-latest
+    if: ${{ needs.rebase-feature-branch.result == 'success' }}
+    env:
+      RUST_MIN_STACK: 67108864 # Give the test worker threads 64 MiB
+      CARGO_INCREMENTAL: 0 # Avoids huge incremental compilation caches on GitHub runners.
+      RUSTFLAGS: "-C debuginfo=0" # Reduce debug artifact size reducing likelyhood of running out of disk.
+    steps:
+      - name: Checkout rebased CX-000
+        uses: actions/checkout@v6
+        with:
+          ref: CX-000
+          fetch-depth: 0
+
+      - name: Install Linux sandbox dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          which bwrap
+          bwrap --version
+
+      - name: Run
+        working-directory: codex-rs
+        run: |
+          cargo test -p codex-core --lib append_execpolicy_amendment_updates_policy_and_file -- --nocapture
+          cargo test -p codex-core --lib append_execpolicy_amendment_rejects_empty_prefix -- --nocapture
+          cargo test -p codex-core --test all approving_execpolicy_amendment_persists_policy_and_skips_future_prompts -- --nocapture
+          cargo test -p codex-core --test all spawned_subagent_execpolicy_amendment_propagates_to_parent_session -- --nocapture
+          cargo test -p codex-core --test all approving_fallback_rule_for_compound_command_works -- --nocapture
+          cargo test -p codex-tui --lib exec_prefix_option_emits_execpolicy_amendment -- --nocapture
+
+  email-if-added-tests-failure:
+    needs: feature-branch-added-tests
+    name: Email if Created Test Failure
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.feature-branch-added-tests.result == 'failure' }}
+    steps:
+      - name: Send failure email
+        uses: hilarion5/send-mail@v1
+        with:
+          smtp-server: ${{ secrets.SMTP_SERVER }}
+          smtp-port: ${{ secrets.SMTP_PORT }}
+          smtp-secure: true
+          from-email: ${{ secrets.SMTP_FROM_EMAIL }}
+          to-email: ${{ secrets.NOTIFY_EMAIL }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "CX-000 Created Test(s) Failed"
+          body: |
+            CX-000 successfully rebased onto synced origin/main, but the created tests failed.
+
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Run number: ${{ github.run_number }}
+            Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Failed job:
+
+            feature-branch-added-tests
+
+            Manual action needed:
+
+            git switch CX-000
+            git pull --ff-only origin CX-000
+
+            cd codex-rs
+
+            RUST_MIN_STACK=67108864
+            export RUST_MIN_STACK=67108864
+
+            cargo test -p codex-core --test all execpolicy_project_scope_writes_to_project_rules -- --nocapture
+            cargo test -p codex-core --test all execpolicy_project_scope_creates_missing_rules_for_trusted_project -- --nocapture
+            cargo test -p codex-tui --lib exec_prefix_shortcut_is_not_bound_for_global_amendment -- --nocapture
+
+  email-if-edited-tests-failure:
+    needs: feature-branch-edited-tests
+    name: Email if Edited Test Failure
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.feature-branch-edited-tests.result == 'failure' }}
+    steps:
+      - name: Send failure email
+        uses: hilarion5/send-mail@v1
+        with:
+          smtp-server: ${{ secrets.SMTP_SERVER }}
+          smtp-port: ${{ secrets.SMTP_PORT }}
+          smtp-secure: true
+          from-email: ${{ secrets.SMTP_FROM_EMAIL }}
+          to-email: ${{ secrets.NOTIFY_EMAIL }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "CX-000 Edited Test(s) Failed"
+          body: |
+            CX-000 successfully rebased onto synced origin/main, but the edited tests failed.
+
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Run number: ${{ github.run_number }}
+            Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Failed job:
+
+            feature-branch-edited-tests
+
+            Manual action needed:
+
+            git switch CX-000
+            git pull --ff-only origin CX-000
+
+            cd codex-rs
+
+            RUST_MIN_STACK=67108864
+            export RUST_MIN_STACK=67108864
+
+            cargo test -p codex-core --lib append_execpolicy_amendment_updates_policy_and_file -- --nocapture
+            cargo test -p codex-core --lib append_execpolicy_amendment_rejects_empty_prefix -- --nocapture
+            cargo test -p codex-core --test all approving_execpolicy_amendment_persists_policy_and_skips_future_prompts -- --nocapture
+            cargo test -p codex-core --test all spawned_subagent_execpolicy_amendment_propagates_to_parent_session -- --nocapture
+            cargo test -p codex-core --test all approving_fallback_rule_for_compound_command_works -- --nocapture
+            cargo test -p codex-tui --lib exec_prefix_option_emits_execpolicy_amendment -- --nocapture
