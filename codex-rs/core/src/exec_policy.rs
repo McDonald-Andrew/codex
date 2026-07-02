@@ -229,6 +229,14 @@ pub enum ExecPolicyUpdateError {
         #[from]
         source: ExecPolicyRuleError,
     },
+    #[error("project-local execpolicy amendment target is unavailable: {reason}")]
+    ProjectDefaultUnavailable { reason: String },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ExecPolicyAmendmentTarget {
+    UserDefault,
+    ProjectDefault(PathBuf),
 }
 
 pub(crate) struct ExecPolicyManager {
@@ -376,6 +384,7 @@ impl ExecPolicyManager {
     pub(crate) async fn append_amendment_and_update(
         &self,
         codex_home: &Path,
+        target: ExecPolicyAmendmentTarget,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let _update_guard =
@@ -387,11 +396,29 @@ impl ExecPolicyManager {
                         "exec policy update semaphore closed".to_string(),
                     ),
                 })?;
-        let policy_path = default_policy_path(codex_home);
+        let (policy_path, initialize_parent_dirs) = match target {
+            ExecPolicyAmendmentTarget::UserDefault => (default_policy_path(codex_home), false),
+            ExecPolicyAmendmentTarget::ProjectDefault(path) => (path, true),
+        };
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = amendment.command.clone();
-            move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
+            move || {
+                if initialize_parent_dirs {
+                    let parent = policy_path
+                        .parent()
+                        .ok_or_else(|| AmendError::MissingParent {
+                            path: policy_path.clone(),
+                        })?;
+                    std::fs::create_dir_all(parent).map_err(|source| {
+                        AmendError::CreatePolicyDir {
+                            dir: parent.to_path_buf(),
+                            source,
+                        }
+                    })?;
+                }
+                blocking_append_allow_prefix_rule(&policy_path, &prefix)
+            }
         })
         .await
         .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
@@ -754,6 +781,12 @@ fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionPr
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+}
+
+pub(crate) fn project_default_policy_path(dot_codex_folder: &Path) -> PathBuf {
+    dot_codex_folder
+        .join(RULES_DIR_NAME)
+        .join(DEFAULT_POLICY_FILE)
 }
 
 fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {

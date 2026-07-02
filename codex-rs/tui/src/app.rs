@@ -159,6 +159,7 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -344,6 +345,13 @@ fn default_exec_approval_decisions(
     if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
         decisions.push(
             CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::ProjectDefault,
+                execpolicy_amendment: execpolicy_amendment.clone(),
+            },
+        );
+        decisions.push(
+            CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::UserDefault,
                 execpolicy_amendment: execpolicy_amendment.clone(),
             },
         );
