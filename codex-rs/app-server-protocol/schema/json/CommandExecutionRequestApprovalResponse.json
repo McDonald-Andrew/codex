@@ -28,10 +28,14 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "scope": {
+                  "$ref": "#/definitions/ExecPolicyAmendmentScope"
                 }
               },
               "required": [
-                "execpolicy_amendment"
+                "execpolicy_amendment",
+                "scope"
               ],
               "type": "object"
             }
@@ -75,6 +79,24 @@
           "description": "User denied the command. The turn will also be immediately interrupted.",
           "enum": [
             "cancel"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ExecPolicyAmendmentScope": {
+      "oneOf": [
+        {
+          "description": "Save the generated execpolicy amendment to the user-level rules file.",
+          "enum": [
+            "user_default"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Save the generated execpolicy amendment to the current trusted project's rules file.",
+          "enum": [
+            "project_default"
           ],
           "type": "string"
         }
