@@ -1,6 +1,24 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ExecPolicyAmendmentScope": {
+      "oneOf": [
+        {
+          "description": "Save the generated execpolicy amendment to the user-level rules file.",
+          "enum": [
+            "user_default"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Save the generated execpolicy amendment to the current trusted project's rules file.",
+          "enum": [
+            "project_default"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "NetworkPolicyAmendment": {
       "properties": {
         "action": {
@@ -44,10 +62,14 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "scope": {
+                  "$ref": "#/definitions/ExecPolicyAmendmentScope"
                 }
               },
               "required": [
-                "proposed_execpolicy_amendment"
+                "proposed_execpolicy_amendment",
+                "scope"
               ],
               "type": "object"
             }
