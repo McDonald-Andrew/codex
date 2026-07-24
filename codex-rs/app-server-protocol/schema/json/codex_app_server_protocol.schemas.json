@@ -2391,10 +2391,14 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "scope": {
+                  "$ref": "#/definitions/ExecPolicyAmendmentScope"
                 }
               },
               "required": [
-                "execpolicy_amendment"
+                "execpolicy_amendment",
+                "scope"
               ],
               "type": "object"
             }
@@ -2678,6 +2682,24 @@
       ],
       "title": "ExecCommandApprovalResponse",
       "type": "object"
+    },
+    "ExecPolicyAmendmentScope": {
+      "oneOf": [
+        {
+          "description": "Save the generated execpolicy amendment to the user-level rules file.",
+          "enum": [
+            "user_default"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Save the generated execpolicy amendment to the current trusted project's rules file.",
+          "enum": [
+            "project_default"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "FileChange": {
       "oneOf": [
@@ -4109,10 +4131,14 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "scope": {
+                  "$ref": "#/definitions/ExecPolicyAmendmentScope"
                 }
               },
               "required": [
-                "proposed_execpolicy_amendment"
+                "proposed_execpolicy_amendment",
+                "scope"
               ],
               "type": "object"
             }

@@ -34,8 +34,10 @@ use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
+use crate::exec_policy::ExecPolicyAmendmentTarget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
+use crate::exec_policy::project_default_policy_path;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -363,6 +365,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecPolicyAmendmentScope;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
@@ -2132,6 +2135,7 @@ impl Session {
     /// commands can use the newly approved prefix.
     pub(crate) async fn persist_execpolicy_amendment(
         &self,
+        target: ExecPolicyAmendmentTarget,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let codex_home = self
@@ -2144,10 +2148,66 @@ impl Session {
 
         self.services
             .exec_policy
-            .append_amendment_and_update(&codex_home, amendment)
+            .append_amendment_and_update(&codex_home, target, amendment)
             .await?;
 
         Ok(())
+    }
+
+    pub(crate) async fn resolve_execpolicy_amendment_target(
+        &self,
+        scope: &ExecPolicyAmendmentScope,
+    ) -> Result<ExecPolicyAmendmentTarget, ExecPolicyUpdateError> {
+        match scope {
+            ExecPolicyAmendmentScope::UserDefault => Ok(ExecPolicyAmendmentTarget::UserDefault),
+
+            ExecPolicyAmendmentScope::ProjectDefault => {
+                let config = {
+                    let state = self.state.lock().await;
+                    state
+                        .session_configuration
+                        .original_config_do_not_use
+                        .clone()
+                };
+
+                if config
+                    .config_layer_stack
+                    .ignore_user_and_project_exec_policy_rules()
+                {
+                    return Err(ExecPolicyUpdateError::ProjectDefaultUnavailable {
+                        reason: "user and project execpolicy rules are ignored for this session"
+                            .to_string(),
+                    });
+                }
+
+                let dot_codex_folder = config
+                    .config_layer_stack
+                    .get_layers(
+                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                        /* include_disabled */ false,
+                    )
+                    .into_iter()
+                    .find_map(|layer| match &layer.name {
+                        ConfigLayerSource::Project { dot_codex_folder } => {
+                            Some(dot_codex_folder.clone())
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        config
+                            .active_project
+                            .is_trusted()
+                            .then(|| config.cwd.join(".codex"))
+                    })
+                    .ok_or_else(|| ExecPolicyUpdateError::ProjectDefaultUnavailable {
+                        reason: "project is not trusted and no trusted project-local .codex config layer is active".to_string(),
+                    })?;
+
+                Ok(ExecPolicyAmendmentTarget::ProjectDefault(
+                    project_default_policy_path(dot_codex_folder.as_path()),
+                ))
+            }
+        }
     }
 
     pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {

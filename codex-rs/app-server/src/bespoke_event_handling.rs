@@ -1982,9 +1982,11 @@ async fn on_command_execution_request_approval_response(
                         (ReviewDecision::ApprovedForSession, None)
                     }
                     CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                        scope,
                         execpolicy_amendment,
                     } => (
                         ReviewDecision::ApprovedExecpolicyAmendment {
+                            scope,
                             proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
                         },
                         None,
