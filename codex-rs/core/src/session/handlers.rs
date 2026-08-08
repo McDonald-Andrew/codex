@@ -379,20 +379,39 @@ pub async fn exec_approval(
 ) {
     let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
     if let ReviewDecision::ApprovedExecpolicyAmendment {
+        scope,
         proposed_execpolicy_amendment,
     } = &decision
-        && let Err(err) = sess
-            .persist_execpolicy_amendment(proposed_execpolicy_amendment)
-            .await
     {
-        let message = format!("Failed to apply execpolicy amendment: {err}");
-        tracing::warn!("{message}");
-        let warning = EventMsg::Warning(WarningEvent { message });
-        sess.send_event_raw(Event {
-            id: event_turn_id.clone(),
-            msg: warning,
-        })
-        .await;
+        let target = match sess.resolve_execpolicy_amendment_target(scope).await {
+            Ok(target) => Some(target),
+            Err(err) => {
+                let message = format!("Failed to resolve execpolicy amendment target: {err}");
+                tracing::warn!("{message}");
+                let warning = EventMsg::Warning(WarningEvent { message });
+                sess.send_event_raw(Event {
+                    id: event_turn_id.clone(),
+                    msg: warning,
+                })
+                .await;
+                None
+            }
+        };
+
+        if let Some(target) = target
+            && let Err(err) = sess
+                .persist_execpolicy_amendment(target, proposed_execpolicy_amendment)
+                .await
+        {
+            let message = format!("Failed to apply execpolicy amendment: {err}");
+            tracing::warn!("{message}");
+            let warning = EventMsg::Warning(WarningEvent { message });
+            sess.send_event_raw(Event {
+                id: event_turn_id.clone(),
+                msg: warning,
+            })
+            .await;
+        }
     }
     match decision {
         ReviewDecision::Abort => {
