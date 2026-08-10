@@ -29,6 +29,18 @@ pub enum EscalationPermissions {
     ResolvedPermissionProfile(ResolvedPermissionProfile),
 }
 
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "protocol/")]
+pub enum ExecPolicyAmendmentScope {
+    /// Save the generated execpolicy amendment to the user-level rules file.
+    #[default]
+    UserDefault,
+
+    /// Save the generated execpolicy amendment to the current trusted project's rules file.
+    ProjectDefault,
+}
+
 /// Proposed execpolicy change to allow commands starting with this prefix.
 ///
 /// The `command` tokens form the prefix that would be added as an execpolicy
@@ -339,6 +351,11 @@ impl ExecApprovalRequestEvent {
         let mut decisions = vec![ReviewDecision::Approved];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::ProjectDefault,
+                proposed_execpolicy_amendment: prefix.clone(),
+            });
+            decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
+                scope: ExecPolicyAmendmentScope::UserDefault,
                 proposed_execpolicy_amendment: prefix.clone(),
             });
         }
